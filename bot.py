@@ -1,6 +1,4 @@
 import random
-import time
-import logging
 import csv
 import requests
 import bs4
@@ -8,7 +6,7 @@ import telegram
 import numpy as np
 import pandas as pd
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 
 def ua():
     uaString= ["Mozilla/5.0 (X11; U; Linux i686; en-US) AppleWebKit/530.5 (KHTML, like Gecko) Chrome/2.0.172.0 Safari/530.5",\
@@ -305,9 +303,8 @@ def help(update, context):
 
 
 def main():
-	BotToken = "1788000753:AAG4AQKCcFlK38pRX8WurS3AnfAsY51GBwE"
+	BotToken = ""
 	u = Updater(token=BotToken, use_context=True)
-	logging.basicConfig(filename="bot2.log", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG)
 	u.dispatcher.add_handler(CommandHandler("start", start, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("stop", stop, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("help", help))
