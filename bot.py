@@ -288,14 +288,10 @@ def debug_tracking(update, context):
 
 def help(update, context):
 	msg = """
-	/add <url> <price> - add a new product
-
+/add <url> <price> - add a new product
 /list - manage your products
-
 /track - track your products
-
 /remove - remove all products
-
 /stop - stop the bot
 	"""
 
@@ -303,8 +299,8 @@ def help(update, context):
 
 
 def main():
-	BotToken = ""
-	u = Updater(token=BotToken, use_context=True)
+	TOKEN = os.getenv("TOKEN")
+	u = Updater(token=TOKEN, use_context=True)
 	u.dispatcher.add_handler(CommandHandler("start", start, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("stop", stop, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("help", help))
@@ -319,7 +315,8 @@ def main():
 	u.dispatcher.add_handler(CommandHandler("list", view_items))
 	u.dispatcher.add_handler(CommandHandler("remove", remove_all))
 	u.dispatcher.add_handler(CommandHandler("track", track))
-	u.start_polling()
+	updater.start_webhook(listen="0.0.0.0", port=5000, url_path=TOKEN)
+    	updater.bot.set_webhook("https://name.herokuapp.com/" + TOKEN)
 	u.idle()
 
 if __name__ == "__main__":
