@@ -1,10 +1,9 @@
+import os
 import random
-import csv
 import requests
 import bs4
 import telegram
-import numpy as np
-import pandas as pd
+import sqlite3
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 
@@ -41,15 +40,11 @@ def ua():
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/534.24 (KHTML, like Gecko) Chrome/70.0.3538.57 Safari/537.36 Hawk/TurboBrowser/v3.0.0.4.9.09"]
     return random.choice(uaString)
 
-spreadsheet_url = "db.csv"
 
 def tracker(url, TrackingPrice, productID, user):
-	df = pd.read_csv(spreadsheet_url)
-	idx = df[(df['userID'] == user) & (df['productID'] == productID)].index
 	res = requests.get(url, headers = ({"User-Agent":''+ua()+''}))
 	soup = bs4.BeautifulSoup(res.content, 'html.parser')
 	print(({"User-Agent":''+ua()+''}))
-	# time.sleep(20)
 
 	title = soup.find(id="productTitle").get_text().strip()
 	try:
@@ -73,9 +68,10 @@ def tracker(url, TrackingPrice, productID, user):
 		print(TrackingPrice)
 		
 		if real_price <= TrackingPrice:
-			avail = df.loc[idx, 'Availability']
-			df.loc[idx, 'Availability'] = ~(avail)
-			df.to_csv(spreadsheet_url, index=False)
+			conn = sqlite3.connect("test.db")
+			conn.execute("UPDATE products SET availability = NOT availability WHERE (user_id, product_id) = (?, ?)", (user, productID))
+			conn.commit()
+			conn.close()
 			print(f"alerts turned off for {title}")
 			return f"*{title}*\n\n💰  *{currency}{amount}*\n\n🧭  In Stock\n\n🛒  [Buy now!]({url})\n\n🔕  _Alerts OFF_"
 		else:
@@ -84,13 +80,15 @@ def tracker(url, TrackingPrice, productID, user):
 		return "not available"
 
 def product_list_keyboard(user):
-	df = pd.read_csv(spreadsheet_url)
-	products = [p for p in df[df['userID'] == user]['Title']]
-	ids = [i for i in df[df['userID'] == user]['productID']]
-	print(ids)
-	if len(ids) != 0:
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
+	products = cur.execute("SELECT title, product_id FROM products WHERE user_id = ?", (user,)).fetchall()
+	conn.commit()
+	conn.close()
+
+	if len(products) > 0:
 		button_list = [
-			[InlineKeyboardButton(product[:60], callback_data=ids[i])] for i, product in enumerate(products)
+			[InlineKeyboardButton(product[0][:60], callback_data=product[1])] for product in products
 		]
 		reply_markup = InlineKeyboardMarkup(button_list)
 	else:
@@ -108,23 +106,30 @@ def stop(update, context):
 
 def track_alert(context: CallbackContext):
 	chat_id = context.job.context
-	df = pd.read_csv(spreadsheet_url)
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
+	products = cur.execute("SELECT url, tracking_price, product_id, availability, title FROM products WHERE user_id = ?", (chat_id,)).fetchall()
+	conn.commit()
+	conn.close()
 	print(f"\n{chat_id}")
-	for i in range(0, len(df["userID"])):
-		if(df["userID"][i]==chat_id and df['Availability'][i]==True):
-			msg = tracker(df["URL"][i], df["TrackingPrice"][i], df["productID"][i], chat_id)
+	for product in products:
+		if product[3] == True:
+			msg = tracker(product[0], product[1], product[2], chat_id)
 			print(msg)
 			if (msg != "price not down") and (msg != "not available"):
 				context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=telegram.ParseMode.MARKDOWN, disable_web_page_preview=True)
 		else:
-			print(f"alerts off for {df['Title'][i]}")
+			print(f"alerts off for {product[4]}")
 
 def track(update: Update, context: CallbackContext):
-	df = pd.read_csv(spreadsheet_url)
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
+	exists = cur.execute("SELECT * FROM products WHERE user_id = ?", (update.message.chat_id,)).fetchall()
+	conn.commit()
+	conn.close()
 	print(update.message.chat_id)
-	exists = int(update.message.chat_id) in df.values
-	if exists:
-		context.bot.send_message(chat_id=update.message.chat_id, text="Just a sec, checking the prices of the products", parse_mode=telegram.ParseMode.MARKDOWN)
+	if len(exists) > 0:
+		context.bot.send_message(chat_id=update.message.chat_id, text="Just a minute, checking the prices of the products", parse_mode=telegram.ParseMode.MARKDOWN)
 		context.job_queue.run_repeating(track_alert, 900, context=update.message.chat_id)
 	else:
 		context.bot.send_message(chat_id=update.message.chat_id, text="No products are been tracked. Start adding products", parse_mode=telegram.ParseMode.MARKDOWN)
@@ -137,6 +142,8 @@ def add_item(update, context):
 		product_id = url.split("/dp/")[1].split("/")[0]
 		user = int(update.effective_chat.id)
 		firstName = str(update.message.from_user.first_name)
+		lastName = str(update.message.from_user.last_name)
+		userName = str(update.message.from_user.username)
 
 		res = requests.get(link, headers = ({"User-Agent":''+ua()+''}))
 		soup = bs4.BeautifulSoup(res.text, "html.parser")
@@ -145,22 +152,17 @@ def add_item(update, context):
 		print(code)
 		if(code == 200 or code == 503):
 			print("Awesome")
-			df = pd.read_csv(spreadsheet_url)
-			df1 = pd.DataFrame(df, columns=['URL', 'TrackingPrice', 'userID', 'firstName', 'Title', 'productID', 'Availability'])
-			df1['bol'] = np.where((df['URL'] == str(link)) & (df['userID'] == int(update.effective_chat.id)), "true", np.nan)
-			print(df1)
-			if("true" in df1.values):
+			conn = sqlite3.connect("test.db")
+			cur = conn.cursor()
+			exists = cur.execute("SELECT * FROM products WHERE (user_id, product_id) = (?, ?)", (user, product_id)).fetchall()
+			if len(exists) > 0:
+				conn.commit()
+				conn.close()
 				update.message.reply_text("You are trying to add the same product which you have previously added. To change the tracking price please remove it and add the product with new price")
 			else:
-				l = len(df["URL"])
-				df.loc[l, ["URL"]] = link
-				df.loc[l, ["TrackingPrice"]] = price
-				df.loc[l,["userID"]] = user
-				df.loc[l,["firstName"]] = firstName
-				df.loc[l,["Title"]] = title
-				df.loc[l, ["productID"]] = product_id
-				df.loc[l, ["Availability"]] = False
-				df.to_csv(spreadsheet_url, index=False)
+				conn.execute("INSERT INTO products (user_id, url, product_id, title, tracking_price, availability, username, first_name, last_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (user, url, product_id, title, price, False, userName, firstName, lastName))
+				conn.commit()
+				conn.close()
 				update.message.reply_text("Product successfully added for tracking")
 		elif(code == 404):
 			update.message.reply_text("Product is currently not listed on amazon")
@@ -182,16 +184,15 @@ def view_items(update, context):
 
 def product_options(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
-	df = pd.read_csv(spreadsheet_url)
 	user = int(update.effective_chat.id)
-	data = df[(df['userID'] == user) & (df['productID'] == query.data)]
-	name = [n for n in data['Title']]
-	available = [a for a in data['Availability']]
-	if available[0]:
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
+	data = cur.execute("SELECT title, availability FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data)).fetchall()[0]
+	if data[1]:
 		alert = "ON"
 	else:
 		alert = "OFF"
-	print(name[0], alert)
+	print(data[0], alert)
 	buttons = [
 		[InlineKeyboardButton("💰  Current price", callback_data=f"price{query.data}")],
 		[InlineKeyboardButton(f"🧭  Availability alerts: {alert}", callback_data=f"available{query.data}")],
@@ -200,31 +201,34 @@ def product_options(update: Update, _: CallbackContext) -> None:
 	]
 	reply_markup = InlineKeyboardMarkup(buttons)
 
+	conn.commit()
+	conn.close()
 	query.answer()
-	query.edit_message_text(text=name[0], reply_markup=reply_markup)
+	query.edit_message_text(text=data[0], reply_markup=reply_markup)
 
 def check_price(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
 
-	df = pd.read_csv(spreadsheet_url)
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
 	user = int(update.effective_chat.id)
-	idx = df[(df['userID'] == user) & (df['productID'] == query.data.split("price")[1])].index
-	product = [p for p in df.loc[idx, 'Title']]
-	url = [u for u in df.loc[idx, 'URL']]
-	res = requests.get(url[0], headers = ({"User-Agent":''+ua()+''}))
+	product = cur.execute("SELECT url, title FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("price")[1])).fetchall()[0]
+	res = requests.get(product[0], headers = ({"User-Agent":''+ua()+''}))
 	soup = bs4.BeautifulSoup(res.content, 'html.parser')
 	print(({"User-Agent":''+ua()+''}))
 
 	try:
 		amount = soup.find(id="priceblock_ourprice").get_text()
-		msg = f"*{product[0]}*\n\n💵  *{amount}*\n\n✅  [Check here!]({url[0]})"
+		msg = f"*{product[1]}*\n\n💵  *{amount}*\n\n✅  [Check here!]({product[0]})"
 	except:
 		try:
 			amount = soup.find(id="priceblock_dealprice").get_text()
-			msg = f"*{product[0]}*\n\n💵  *{amount}*\n\n✅  [Check here!]({url[0]})"
+			msg = f"*{product[1]}*\n\n💵  *{amount}*\n\n✅  [Check here!]({product[0]})"
 		except:
-			msg = f"*{product[0]}*\n\n🛒  Out of Stock"
+			msg = f"*{product[1]}*\n\n🛒  Out of Stock"
 
+	conn.commit()
+	conn.close()
 	query.answer()
 	print(msg)
 	query.edit_message_text(msg, parse_mode=telegram.ParseMode.MARKDOWN, disable_web_page_preview=True)
@@ -232,43 +236,41 @@ def check_price(update: Update, _: CallbackContext) -> None:
 def change_availability(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
 	
-	df = pd.read_csv(spreadsheet_url)
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
 	user = int(update.effective_chat.id)
-	idx = df[(df['userID'] == user) & (df['productID'] == query.data.split("available")[1])].index
-	avail = df.iloc[idx]['Availability']
-	print(avail)
-	print(~(avail))
-	df.loc[idx, 'Availability'] = ~(avail)
-	alert = [a for a in df.loc[idx, 'Availability']]
-	product = [p for p in df.loc[idx, 'Title']]
-	if alert[0]:
-		alert_message = f"🚨🚨     ALERTS ON    🚨🚨\n{product[0]}"
+	conn.execute("UPDATE products SET availability = NOT availability WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("available")[1]))
+	product = cur.execute("SELECT title, availability FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("available")[1])).fetchall()[0]
+	if product[1]:
+		alert_message = f"🚨🚨     *ALERTS ON*    🚨🚨\n{product[0]}"
 	else:
-		alert_message = f"🔕🔕     ALERTS OFF    🔕🔕\n{product[0]}"
-	print(df)
-	df.to_csv(spreadsheet_url, index=False)
+		alert_message = f"🔕🔕     *ALERTS OFF*    🔕🔕\n{product[0]}"
 
+	conn.commit()
+	conn.close()
 	query.answer()
 	query.edit_message_text(alert_message, parse_mode=telegram.ParseMode.MARKDOWN)
 
 def remove_product(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
-	df = pd.read_csv(spreadsheet_url)
 	user = int(update.effective_chat.id)
-	idx = df[(df['userID'] == user) & (df['productID'] == query.data.split("remove")[1])].index
-	product = [p for p in df.loc[idx, 'Title']]
-	df.drop(idx, axis = 0, inplace = True)
-	df.to_csv(spreadsheet_url, index=False)
+	conn = sqlite3.connect("test.db")
+	cur = conn.cursor()
+	product = cur.execute("SELECT title FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("remove")[1])).fetchall()[0]
+	conn.execute("DELETE FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("remove")[1]))
 
+	conn.commit()
+	conn.close()
 	query.answer()
 	query.edit_message_text(text=f"{product[0]} removed")
 
 def remove_all(update, context):
 	try:
 		user = int(update.effective_chat.id)
-		df = pd.read_csv(spreadsheet_url)
-		df = df[~(df['userID'] == user)]
-		df.to_csv(spreadsheet_url, index=False)
+		conn = sqlite3.connect("test.db")
+		conn.execute("DELETE FROM products WHERE user_id = ?", (user,))
+		conn.commit()
+		conn.close()
 		context.job_queue.stop()
 		update.message.reply_text("All the products are now removed")
 	except (IndexError, ValueError):
@@ -277,14 +279,6 @@ def remove_all(update, context):
 def debug_connection(update, context):
 	msg = "Bot running"
 	context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-
-def debug_tracking(update, context):
-	df = pd.read_csv(spreadsheet_url)
-	try:
-		msg = tracker(df["URL"][0], df["TrackingPrice"][0])
-		context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-	except:
-		context.bot.send_message(chat_id=update.effective_chat.id, text="Nothing to track for now")
 
 def help(update, context):
 	msg = """
@@ -301,11 +295,10 @@ def help(update, context):
 def main():
 	TOKEN = os.getenv("TOKEN")
 	u = Updater(token=TOKEN, use_context=True)
-	u.dispatcher.add_handler(CommandHandler("start", start, pass_job_queue=True))
+	u.dispatcher.add_handler(CommandHandler("start", start))
 	u.dispatcher.add_handler(CommandHandler("stop", stop, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("help", help))
-	u.dispatcher.add_handler(CommandHandler("debugconnection", debug_connection))
-	u.dispatcher.add_handler(CommandHandler("debugtracking", debug_tracking))
+	u.dispatcher.add_handler(CommandHandler("debug", debug_connection))
 	u.dispatcher.add_handler(CommandHandler("add", add_item))
 	u.dispatcher.add_handler(CallbackQueryHandler(product_options, pattern=r"^[a-zA-z0-9]{10}$"))
 	u.dispatcher.add_handler(CallbackQueryHandler(check_price, pattern=r"^price[a-zA-z0-9]{10}$"))
@@ -315,9 +308,9 @@ def main():
 	u.dispatcher.add_handler(CommandHandler("list", view_items))
 	u.dispatcher.add_handler(CommandHandler("remove", remove_all))
 	u.dispatcher.add_handler(CommandHandler("track", track))
-	updater.start_webhook(listen="0.0.0.0", port=5000, url_path=TOKEN)
-    	updater.bot.set_webhook("https://name.herokuapp.com/" + TOKEN)
+	u.start_webhook(listen="0.0.0.0", port=5000, url_path=TOKEN)
+	u.bot.set_webhook("https://trackamzn.herokuapp.com/" + TOKEN)
 	u.idle()
-
+    
 if __name__ == "__main__":
 	main()
