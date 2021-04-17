@@ -1,6 +1,4 @@
 bs4
 python-telegram-bot
 requests
-pandas
-numpy
 sqlite3
