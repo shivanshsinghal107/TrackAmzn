@@ -3,3 +3,4 @@ python-telegram-bot
 requests
 pandas
 numpy
+sqlite3
