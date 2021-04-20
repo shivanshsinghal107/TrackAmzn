@@ -263,7 +263,7 @@ def remove_all(update, context):
 	except (IndexError, ValueError):
 		update.message.reply_text("Usage: /remove")
 
-def debug_dbection(update, context):
+def debug_connection(update, context):
 	msg = "Bot running"
 	context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
@@ -285,7 +285,7 @@ def main():
 	u.dispatcher.add_handler(CommandHandler("start", start))
 	u.dispatcher.add_handler(CommandHandler("stop", stop, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("help", help))
-	u.dispatcher.add_handler(CommandHandler("debugdbection", debug_dbection))
+	u.dispatcher.add_handler(CommandHandler("debug", debug_connection))
 	u.dispatcher.add_handler(CommandHandler("add", add_item))
 	u.dispatcher.add_handler(CallbackQueryHandler(product_options, pattern=r"^[a-zA-z0-9]{10}$"))
 	u.dispatcher.add_handler(CallbackQueryHandler(check_price, pattern=r"^price[a-zA-z0-9]{10}$"))
