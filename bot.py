@@ -9,7 +9,7 @@ from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboard
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 
 # Set up database
-engine = create_engine(os.getenv("DATABASE_URL", "sqlite:///database.db"))
+engine = create_engine(os.getenv("DATABASE_URI", "sqlite:///database.db"))
 db = scoped_session(sessionmaker(bind=engine))
 
 def ua():
