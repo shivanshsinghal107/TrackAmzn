@@ -295,10 +295,9 @@ def main():
 	u.dispatcher.add_handler(CommandHandler("list", view_items))
 	u.dispatcher.add_handler(CommandHandler("remove", remove_all))
 	u.dispatcher.add_handler(CommandHandler("track", track))
-	PORT = int(os.environ.get('PORT', 5000))
-	u.start_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN)
+	PORT = int(os.environ.get('PORT', '8443'))
+	u.start_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://trackamzn.herokuapp.com/{TOKEN}")
 	u.bot.set_webhook("https://trackamzn.herokuapp.com/" + TOKEN)
-	# u.start_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://trackamzn.herokuapp.com/{TOKEN}")
 	u.idle()
     
 if __name__ == "__main__":
