@@ -9,7 +9,7 @@ from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboard
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 
 # Set up database
-engine = create_engine(os.getenv("DATABASE_URI", "sqlite:///database.db"))
+engine = create_engine(os.getenv("DATABASE_URL", "sqlite:///database.db"))
 db = scoped_session(sessionmaker(bind=engine))
 
 def ua():
@@ -295,10 +295,7 @@ def main():
 	u.dispatcher.add_handler(CommandHandler("list", view_items))
 	u.dispatcher.add_handler(CommandHandler("remove", remove_all))
 	u.dispatcher.add_handler(CommandHandler("track", track))
-	u.start_webhook(listen="0.0.0.0",
-                        port=8443,
-                        url_path=TOKEN,
-                        webhook_url='https://trackamzn.herokuapp.com/' + TOKEN)
+	u.start_webhook(listen="0.0.0.0", port=8443, url_path=TOKEN, webhook_url=f"https://trackamzn.herokuapp.com/{TOKEN}")
 	u.idle()
     
 if __name__ == "__main__":
