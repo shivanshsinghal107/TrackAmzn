@@ -2,3 +2,4 @@ bs4
 python-telegram-bot
 requests
 sqlalchemy
+psycopg2
