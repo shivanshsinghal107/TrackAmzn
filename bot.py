@@ -3,9 +3,14 @@ import random
 import requests
 import bs4
 import telegram
-import sqlite3
+from sqlalchemy import create_engine
+from sqlalchemy.orm import scoped_session, sessionmaker
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
+
+# Set up database
+engine = create_engine(os.getenv("DATABASE_URL", "sqlite:///database.db"))
+db = scoped_session(sessionmaker(bind=engine))
 
 def ua():
     uaString= ["Mozilla/5.0 (X11; U; Linux i686; en-US) AppleWebKit/530.5 (KHTML, like Gecko) Chrome/2.0.172.0 Safari/530.5",\
@@ -68,10 +73,9 @@ def tracker(url, TrackingPrice, productID, user):
 		print(TrackingPrice)
 		
 		if real_price <= TrackingPrice:
-			conn = sqlite3.connect("test.db")
-			conn.execute("UPDATE products SET availability = NOT availability WHERE (user_id, product_id) = (?, ?)", (user, productID))
-			conn.commit()
-			conn.close()
+			db.execute("UPDATE products SET availability = NOT availability WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": productID})
+			db.commit()
+			db.close()
 			print(f"alerts turned off for {title}")
 			return f"*{title}*\n\n💰  *{currency}{amount}*\n\n🧭  In Stock\n\n🛒  [Buy now!]({url})\n\n🔕  _Alerts OFF_"
 		else:
@@ -80,15 +84,12 @@ def tracker(url, TrackingPrice, productID, user):
 		return "not available"
 
 def product_list_keyboard(user):
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
-	products = cur.execute("SELECT title, product_id FROM products WHERE user_id = ?", (user,)).fetchall()
-	conn.commit()
-	conn.close()
-
-	if len(products) > 0:
+	products = db.execute("SELECT title, product_id FROM products WHERE user_id = :user_id", {"user_id": user}).fetchall()
+	db.close()
+	
+	if products:
 		button_list = [
-			[InlineKeyboardButton(product[0][:60], callback_data=product[1])] for product in products
+			[InlineKeyboardButton(product.title[:60], callback_data=product.product_id)] for product in products
 		]
 		reply_markup = InlineKeyboardMarkup(button_list)
 	else:
@@ -106,27 +107,21 @@ def stop(update, context):
 
 def track_alert(context: CallbackContext):
 	chat_id = context.job.context
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
-	products = cur.execute("SELECT url, tracking_price, product_id, availability, title FROM products WHERE user_id = ?", (chat_id,)).fetchall()
-	conn.commit()
-	conn.close()
+	products = db.execute("SELECT url, tracking_price, product_id, availability, title FROM products WHERE user_id = :user_id", {"user_id": chat_id}).fetchall()
+	db.close()
 	print(f"\n{chat_id}")
 	for product in products:
-		if product[3] == True:
-			msg = tracker(product[0], product[1], product[2], chat_id)
+		if product.availability == True:
+			msg = tracker(product.url, product.tracking_price, product.product_id, chat_id)
 			print(msg)
 			if (msg != "price not down") and (msg != "not available"):
 				context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=telegram.ParseMode.MARKDOWN, disable_web_page_preview=True)
 		else:
-			print(f"alerts off for {product[4]}")
+			print(f"alerts off for {product.title}")
 
 def track(update: Update, context: CallbackContext):
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
-	exists = cur.execute("SELECT * FROM products WHERE user_id = ?", (update.message.chat_id,)).fetchall()
-	conn.commit()
-	conn.close()
+	exists = db.execute("SELECT * FROM products WHERE user_id = :user_id", {"user_id": update.message.chat_id}).fetchall()
+	db.close()
 	print(update.message.chat_id)
 	if len(exists) > 0:
 		context.bot.send_message(chat_id=update.message.chat_id, text="Just a minute, checking the prices of the products", parse_mode=telegram.ParseMode.MARKDOWN)
@@ -152,17 +147,14 @@ def add_item(update, context):
 		print(code)
 		if(code == 200 or code == 503):
 			print("Awesome")
-			conn = sqlite3.connect("test.db")
-			cur = conn.cursor()
-			exists = cur.execute("SELECT * FROM products WHERE (user_id, product_id) = (?, ?)", (user, product_id)).fetchall()
+			exists = db.execute("SELECT * FROM products WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": product_id}).fetchall()
 			if len(exists) > 0:
-				conn.commit()
-				conn.close()
+				db.close()
 				update.message.reply_text("You are trying to add the same product which you have previously added. To change the tracking price please remove it and add the product with new price")
 			else:
-				conn.execute("INSERT INTO products (user_id, url, product_id, title, tracking_price, availability, username, first_name, last_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (user, url, product_id, title, price, False, userName, firstName, lastName))
-				conn.commit()
-				conn.close()
+				db.execute("INSERT INTO products (user_id, url, product_id, title, tracking_price, availability, username, first_name, last_name) VALUES (:user_id, :url, :product_id, :title, :tracking_price, :availability, :username, :first_name, :last_name)", {"user_id": user, "url": url, "product_id": product_id, "title": title, "tracking_price": price, "availability": False, "username": userName, "first_name": firstName, "last_name": lastName})
+				db.commit()
+				db.close()
 				update.message.reply_text("Product successfully added for tracking")
 		elif(code == 404):
 			update.message.reply_text("Product is currently not listed on amazon")
@@ -185,14 +177,14 @@ def view_items(update, context):
 def product_options(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
 	user = int(update.effective_chat.id)
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
-	data = cur.execute("SELECT title, availability FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data)).fetchall()[0]
-	if data[1]:
+	data = db.execute("SELECT title, availability FROM products WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": query.data}).fetchall()[0]
+	db.close()
+
+	if data.availability:
 		alert = "ON"
 	else:
 		alert = "OFF"
-	print(data[0], alert)
+	print(data.title, alert)
 	buttons = [
 		[InlineKeyboardButton("💰  Current price", callback_data=f"price{query.data}")],
 		[InlineKeyboardButton(f"🧭  Availability alerts: {alert}", callback_data=f"available{query.data}")],
@@ -201,82 +193,77 @@ def product_options(update: Update, _: CallbackContext) -> None:
 	]
 	reply_markup = InlineKeyboardMarkup(buttons)
 
-	conn.commit()
-	conn.close()
 	query.answer()
-	query.edit_message_text(text=data[0], reply_markup=reply_markup)
+	query.edit_message_text(text=data.title, reply_markup=reply_markup)
 
 def check_price(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
-
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
 	user = int(update.effective_chat.id)
-	product = cur.execute("SELECT url, title FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("price")[1])).fetchall()[0]
-	res = requests.get(product[0], headers = ({"User-Agent":''+ua()+''}))
+
+	product = db.execute("SELECT url, title FROM products WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": query.data.split("price")[1]}).fetchall()[0]
+	db.close()
+	
+	res = requests.get(product.url, headers = ({"User-Agent":''+ua()+''}))
 	soup = bs4.BeautifulSoup(res.content, 'html.parser')
 	print(({"User-Agent":''+ua()+''}))
 
 	try:
 		amount = soup.find(id="priceblock_ourprice").get_text()
-		msg = f"*{product[1]}*\n\n💵  *{amount}*\n\n✅  [Check here!]({product[0]})"
+		msg = f"*{product.title}*\n\n💵  *{amount}*\n\n✅  [Check here!]({product.url})"
 	except:
 		try:
 			amount = soup.find(id="priceblock_dealprice").get_text()
-			msg = f"*{product[1]}*\n\n💵  *{amount}*\n\n✅  [Check here!]({product[0]})"
+			msg = f"*{product.title}*\n\n💵  *{amount}*\n\n✅  [Check here!]({product.url})"
 		except:
-			msg = f"*{product[1]}*\n\n🛒  Out of Stock"
+			msg = f"*{product.title}*\n\n🛒  Out of Stock"
 
-	conn.commit()
-	conn.close()
 	query.answer()
 	print(msg)
 	query.edit_message_text(msg, parse_mode=telegram.ParseMode.MARKDOWN, disable_web_page_preview=True)
 
 def change_availability(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
-	
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
 	user = int(update.effective_chat.id)
-	conn.execute("UPDATE products SET availability = NOT availability WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("available")[1]))
-	product = cur.execute("SELECT title, availability FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("available")[1])).fetchall()[0]
-	if product[1]:
+    
+	db.execute("UPDATE products SET availability = NOT availability WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": query.data.split("available")[1]})
+	product = db.execute("SELECT title, availability FROM products WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": query.data.split("available")[1]}).fetchall()[0]
+	db.commit()
+	db.close()
+
+	if product.availability:
 		alert_message = f"🚨🚨     *ALERTS ON*    🚨🚨\n{product[0]}"
 	else:
 		alert_message = f"🔕🔕     *ALERTS OFF*    🔕🔕\n{product[0]}"
 
-	conn.commit()
-	conn.close()
 	query.answer()
 	query.edit_message_text(alert_message, parse_mode=telegram.ParseMode.MARKDOWN)
 
 def remove_product(update: Update, _: CallbackContext) -> None:
 	query = update.callback_query
 	user = int(update.effective_chat.id)
-	conn = sqlite3.connect("test.db")
-	cur = conn.cursor()
-	product = cur.execute("SELECT title FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("remove")[1])).fetchall()[0]
-	conn.execute("DELETE FROM products WHERE (user_id, product_id) = (?, ?)", (user, query.data.split("remove")[1]))
 
-	conn.commit()
-	conn.close()
+	product = db.execute("SELECT title FROM products WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": query.data.split("remove")[1]}).fetchall()[0]
+	db.execute("DELETE FROM products WHERE user_id = :user_id AND product_id = :product_id", {"user_id": user, "product_id": query.data.split("remove")[1]})
+	db.commit()
+	db.close()
+	
 	query.answer()
-	query.edit_message_text(text=f"{product[0]} removed")
+	query.edit_message_text(text=f"{product.title} removed")
 
 def remove_all(update, context):
 	try:
 		user = int(update.effective_chat.id)
-		conn = sqlite3.connect("test.db")
-		conn.execute("DELETE FROM products WHERE user_id = ?", (user,))
-		conn.commit()
-		conn.close()
+
+		db.execute("DELETE FROM products WHERE user_id = :user_id", {"user_id": user})
+		db.commit()
+		db.close()
+		
 		context.job_queue.stop()
 		update.message.reply_text("All the products are now removed")
 	except (IndexError, ValueError):
 		update.message.reply_text("Usage: /remove")
 
-def debug_connection(update, context):
+def debug_dbection(update, context):
 	msg = "Bot running"
 	context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
@@ -298,7 +285,7 @@ def main():
 	u.dispatcher.add_handler(CommandHandler("start", start))
 	u.dispatcher.add_handler(CommandHandler("stop", stop, pass_job_queue=True))
 	u.dispatcher.add_handler(CommandHandler("help", help))
-	u.dispatcher.add_handler(CommandHandler("debug", debug_connection))
+	u.dispatcher.add_handler(CommandHandler("debugdbection", debug_dbection))
 	u.dispatcher.add_handler(CommandHandler("add", add_item))
 	u.dispatcher.add_handler(CallbackQueryHandler(product_options, pattern=r"^[a-zA-z0-9]{10}$"))
 	u.dispatcher.add_handler(CallbackQueryHandler(check_price, pattern=r"^price[a-zA-z0-9]{10}$"))
